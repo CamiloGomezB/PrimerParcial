@@ -5,6 +5,17 @@ Instancia de la misión que recibe el agente y el frontend.
 El archivo de trabajo es `scenario.json`. Es la **fuente de verdad** de esta
 demo; el profesor puede enviar otro JSON con las mismas reglas.
 
+Junto a él viven las variantes usadas por los tests de validación:
+
+| Archivo | Caso |
+|---|---|
+| `scenario_cost_tradeoff.json` | El plan con menos acciones no es el más barato |
+| `scenario_alt_routes.json` | Dos rutas distintas al mismo estado del mundo |
+| `scenario_unsolvable.json` | Misión imposible: el agente devuelve `FAILURE` |
+
+Las variantes no incluyen el bloque `layout`, que sólo usa el frontend para
+dibujar: se prueban por `curl` o desde `backend/tests/test_validation_cases.py`.
+
 ## Contenido del demo
 
 - 5 zonas: CONTROL, STORAGE, WORKSHOP, GENERATOR_BAY, COMMAND_DECK

@@ -1,78 +1,167 @@
-# Proyecto — Emergency Control
+# Emergency Control — Planificador autónomo
 
-El diseño interno de la IA lo escribe usted en [`design.md`](design.md) **antes**
-de implementar. Ese archivo ya trae las subsecciones que debe completar
-(estado, acciones, `DROP`, batería, tamaño del espacio). El enunciado está en
-el `README.MD` de la raíz; las reglas del mundo, en [`../CONTRATO.md`](../CONTRATO.md).
+Agente de búsqueda que resuelve la misión del parcial: encuentra el plan de
+**menor costo** que deja todas las estaciones de `goal` en línea, o devuelve
+`FAILURE` si no existe.
 
-## Estructura
+- El diseño de IA (estado, acciones, transición, meta, costo, estrategia) está
+  en [`design.md`](design.md).
+- Las reglas del mundo y el formato del plan, en [`../CONTRATO.md`](../CONTRATO.md).
 
 ```text
 project/
-├── frontend/          # React + R3F — simulación 3D voxel
-├── backend/           # FastAPI — POST /api/solve (plan demo)
-├── scenarios/         # scenario.json — fuente de verdad
+├── frontend/          # React + R3F — simulación 3D y banco de pruebas
+├── backend/           # FastAPI — POST /api/solve (agente UCS)
+│   └── src/agent/     # domain · state · actions · search · translate
+├── scenarios/         # scenario.json y las variantes de validación
 ├── design.md
 └── README.md
 ```
 
-## Cómo levantar (tú)
+---
 
-Abre **dos terminales**.
+## 1. Requisitos
 
-### Terminal 1 — Backend
+- **Python 3.10+** (probado con 3.12)
+- **Node.js 18+** y npm
+
+## 2. Instalar dependencias
+
+**Backend**
 
 ```bash
 cd project/backend
 python -m venv .venv
-.\.venv\Scripts\activate
+.\.venv\Scripts\activate          # Windows
+# source .venv/bin/activate       # macOS / Linux
 pip install -r requirements.txt
-uvicorn main:app --app-dir src --port 8000
 ```
 
-Comprobar: http://127.0.0.1:8000/api/health
-
-### Terminal 2 — Frontend
+**Frontend**
 
 ```bash
 cd project/frontend
 npm install
-npm run dev
 ```
 
-Abrir: http://localhost:5173
-
-Pulsa **EXECUTE PLAN**. El frontend llama a `/api/solve` (proxy Vite → puerto 8000) y reproduce el plan casilla a casilla.
-
-Hasta que conecte su agente, `/api/solve` devuelve el plan artesanal de `demo_plan.py` (sin búsqueda). Ese plan existe para probar el frontend: es legal, no es necesariamente el de menor costo, y usa `DROP` porque la capacidad es 3. No tome esos `DROP` como «hay que soltar en cualquier zona»: son un ejemplo de *presión de carga*.
-
-### Tests del plan demo
+## 3. Iniciar el backend
 
 ```bash
 cd project/backend
 .\.venv\Scripts\activate
-python tests/test_demo_plan.py
+uvicorn main:app --app-dir src --port 8000
 ```
 
-## Contrato visual vs agente (importante)
+Comprobación: <http://127.0.0.1:8000/api/health> → `{"status":"ok"}`
 
-La versión oficial y completa de este contrato (esquema JSON, acciones de `INTERACT`, reglas del mundo y costos) está en `../CONTRATO.md`, que forma parte del enunciado.
+## 4. Iniciar el frontend
 
-El enunciado fija **4 operaciones visuales** que el frontend entiende:
+En **otra terminal**:
 
-```text
-MOVE | PICKUP | DROP | INTERACT
+```bash
+cd project/frontend
+npm run dev
 ```
 
-`REPAIR`, `ACTIVATE`, `OPEN_DOOR`, `RECHARGE` **no son ops del plan de alto nivel**: son el campo `action` dentro de un paso `INTERACT`.
+Abrir <http://localhost:5173>. Vite redirige `/api` al puerto 8000, así que no
+hay nada más que configurar.
 
-Ejemplo de lo que debe devolver `/api/solve`:
+## 5. Ejecutar el agente
+
+Pulsar **▶ EXECUTE PLAN**. El frontend envía `scenario.json` a `POST /api/solve`,
+recibe el plan y lo **reejecuta paso a paso contra su propio simulador**: no se
+fía del backend, valida cada operación.
+
+La primera resolución de la instancia demo tarda unos **15 segundos** (UCS
+explora ~236 000 estados). Es tiempo de búsqueda, no de red.
+
+Sin abrir el navegador:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/solve \
+     -H "Content-Type: application/json" -d "{}"
+```
+
+Con un escenario propio:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/solve \
+     -H "Content-Type: application/json" \
+     -d @../scenarios/scenario_cost_tradeoff.json
+```
+
+> El escenario llega **en el cuerpo de la petición**: el agente no lee ids,
+> costos ni cantidades del ejemplo. Se puede probar cualquier instancia con las
+> mismas reglas sin tocar el código.
+
+## 6. Probar otras misiones
+
+| Escenario | Para qué sirve |
+|---|---|
+| `scenarios/scenario.json` | Instancia principal (5 zonas, 3 puertas, 3 paneles, 3 estaciones) |
+| `scenarios/scenario_cost_tradeoff.json` | El plan con menos acciones **no** es el más barato |
+| `scenarios/scenario_alt_routes.json` | Dos rutas al mismo estado del mundo |
+| `scenarios/scenario_unsolvable.json` | Misión imposible → `FAILURE` |
+
+Las tres variantes no traen el bloque `layout`, que sólo usa el frontend para
+dibujar; se prueban por `curl` o desde los tests.
+
+## 7. Interpretar el resultado
+
+**Respuesta de `/api/solve`**
 
 ```json
-{ "op": "INTERACT", "target": "PANEL_A", "action": "REPAIR", "consumes": "FUSE", "cost": 2 }
+{
+  "solution_found": true,
+  "total_cost": 80,
+  "steps": [ { "op": "PICKUP", "item": "KEY1", "cost": 1 }, ... ],
+  "message": "Plan óptimo por búsqueda de costo uniforme (35 pasos).",
+  "stats": { "expanded": 236523, "elapsed_ms": 13570, ... }
+}
 ```
 
-- **Agente (estudiante):** puede modelar acciones internas (`REPAIR_PANEL_A`, etc.) y luego **traducirlas** a `MOVE`/`PICKUP`/`DROP`/`INTERACT`.
-- **Frontend / banco de pruebas:** solo ejecuta esas 4 ops. El log muestra `INTERACT REPAIR ...` para dejar claro el `op` + el `action`.
+- `solution_found: false` con `steps: []` es el caso `FAILURE` del enunciado:
+  el agente agotó el espacio de estados y demostró que no hay plan.
+- `total_cost` es la suma de los costos oficiales del escenario y coincide con
+  la energía que gasta el robot al ejecutar el plan.
+- `stats` es instrumentación añadida (no forma parte del contrato); el frontend
+  ignora los campos que no conoce.
 
-Así no hay contradicción: la capa visual no define la IA; solo anima el plan ya traducido.
+**En pantalla**
+
+| Elemento | Qué indica |
+|---|---|
+| POWER CORE | Batería restante del robot |
+| PAYLOAD | Objetos cargados y plazas libres |
+| MISSION PROGRESS | Paneles `DAMAGED/OK` y estaciones `OFFLINE/ONLINE`; ★ marca las que exige la meta |
+| ENERGY COST | Energía gastada, total del plan y `match` cuando coinciden |
+| EXECUTION LOG | Cada paso ejecutado o el motivo exacto del rechazo |
+| Banner superior | `MISSION COMPLETE`, `FAILURE` o `PLAN REJECTED BY SIMULATOR` |
+
+Un plan correcto termina con todas las estaciones de la meta en verde, el banner
+en `MISSION COMPLETE` y la energía gastada igual al total del plan.
+
+## 8. Tests
+
+```bash
+cd project/backend
+.\.venv\Scripts\activate
+
+python tests/test_agent_core.py        # estado canónico, Applicable, transición
+python tests/test_search.py            # optimalidad, determinismo, FAILURE
+python tests/test_api_contract.py      # el plan cumple CONTRATO.md
+python tests/test_validation_cases.py  # los 5 casos del Entregable 3
+python tests/test_demo_plan.py         # plan artesanal de referencia
+```
+
+`test_search.py` incluye un contraste **contra búsqueda exhaustiva** en una
+instancia reducida, que confirma que el plan devuelto es realmente el de menor
+costo.
+
+## 9. Notas
+
+- `src/demo_plan.py` es el plan artesanal del repositorio base. Se conserva como
+  referencia y **no** interviene en `/api/solve`.
+- Antes de responder, el backend reejecuta su propio plan contra
+  `src/simulator.py` (las mismas reglas que aplica el frontend) y comprueba
+  legalidad, meta y correspondencia de costos.

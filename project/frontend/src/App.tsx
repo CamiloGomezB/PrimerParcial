@@ -17,6 +17,7 @@ export default function App() {
   const appendLog = useSimStore((s) => s.appendLog)
   const setError = useSimStore((s) => s.setError)
   const setOutcome = useSimStore((s) => s.setOutcome)
+  const setRunning = useSimStore((s) => s.setRunning)
 
   useEffect(() => {
     loadScenario(scenario)
@@ -26,7 +27,11 @@ export default function App() {
     try {
       setError(null)
       reset()
-      appendLog({ text: '[---] Requesting plan from /api/solve ...', level: 'info' })
+      setOutcome('running')
+      appendLog({
+        text: '[---] Requesting plan from /api/solve ... (UCS puede tardar unos segundos)',
+        level: 'info',
+      })
       const response = await fetchPlan(scenario)
       setPlan(response)
       if (!response.solution_found) {
@@ -54,6 +59,7 @@ export default function App() {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
       setOutcome('rejected')
+      setRunning(false)
       appendLog({ text: `[---] API ERROR: ${msg}`, level: 'error' })
     }
   }

@@ -34,6 +34,7 @@ export async function runPlan(): Promise<void> {
 
   let current = runtime
 
+  try {
   for (let i = 0; i < plan.length; i++) {
     if (!useSimStore.getState().running) break
     const step = plan[i]
@@ -44,7 +45,6 @@ export async function runPlan(): Promise<void> {
       store.appendLog({ text: `[${idx}] ERROR: ${result.message}`, level: 'error' })
       store.setError(result.message)
       store.setOutcome('rejected')
-      store.setRunning(false)
       return
     }
 
@@ -78,8 +78,11 @@ export async function runPlan(): Promise<void> {
     })
     store.setOutcome('failed')
   }
-  store.setRunning(false)
-  store.setAnim([], null)
+  } finally {
+    // Pase lo que pase, la UI vuelve a quedar operativa.
+    store.setRunning(false)
+    store.setAnim([], null)
+  }
 }
 
 function normalizeAngle(a: number): number {

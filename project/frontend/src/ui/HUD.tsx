@@ -203,18 +203,23 @@ export function BottomControls({
   onReset: () => void
 }) {
   const running = useSimStore((s) => s.running)
+  const outcome = useSimStore((s) => s.outcome)
+  const planLen = useSimStore((s) => s.plan.length)
   const speed = useSimStore((s) => s.speed)
   const setSpeed = useSimStore((s) => s.setSpeed)
   const setRunning = useSimStore((s) => s.setRunning)
   const zone = useSimStore((s) => s.runtime?.robotZone)
+  // Mientras el backend busca aún no hay plan: se avisa para que no parezca
+  // que la interfaz se colgó.
+  const searching = outcome === 'running' && planLen === 0
   const zoneName = useSimStore(
     (s) => s.scenario?.zones.find((z) => z.id === s.runtime?.robotZone)?.name,
   )
 
   return (
     <footer className="hud-bottom">
-      <button className="btn btn-primary" onClick={onExecute} disabled={running}>
-        ▶ EXECUTE PLAN
+      <button className="btn btn-primary" onClick={onExecute} disabled={running || searching}>
+        {searching ? '⏳ SEARCHING...' : '▶ EXECUTE PLAN'}
       </button>
       <button
         className="btn btn-secondary"

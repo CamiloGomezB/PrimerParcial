@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "id": "alt_routes",
+    "title": "Caso 5 — rutas alternativas al mismo estado del mundo",
+    "description": "Z4 se alcanza por Z2 (2+2) o por Z3 (5+5). Ambas rutas producen exactamente el mismo estado del mundo; el agente debe conservar la barata."
+  },
+  "robot": { "start": "Z1", "battery_max": 100, "battery_start": 100, "cargo_capacity": 2 },
+  "zones": [
+    { "id": "Z1", "name": "START", "recharge": false },
+    { "id": "Z2", "name": "SHORTCUT", "recharge": false },
+    { "id": "Z3", "name": "LONG_WAY", "recharge": false },
+    { "id": "Z4", "name": "CORE_BAY", "recharge": false }
+  ],
+  "corridors": [
+    { "from": "Z1", "to": "Z2", "cost": 2, "door": null },
+    { "from": "Z2", "to": "Z1", "cost": 2, "door": null },
+    { "from": "Z2", "to": "Z4", "cost": 2, "door": null },
+    { "from": "Z4", "to": "Z2", "cost": 2, "door": null },
+    { "from": "Z1", "to": "Z3", "cost": 5, "door": null },
+    { "from": "Z3", "to": "Z1", "cost": 5, "door": null },
+    { "from": "Z3", "to": "Z4", "cost": 5, "door": null },
+    { "from": "Z4", "to": "Z3", "cost": 5, "door": null }
+  ],
+  "doors": [],
+  "keys": [],
+  "tools": [{ "id": "TOOL", "repairs": "X", "zone": "Z1", "weight": 1 }],
+  "materials": [{ "type": "PART", "zone": "Z1", "count": 1, "weight": 1 }],
+  "panels": [
+    {
+      "id": "PANEL",
+      "zone": "Z4",
+      "damage": "X",
+      "requires": { "tool": "TOOL", "material": "PART" },
+      "state": "DAMAGED"
+    }
+  ],
+  "stations": [
+    {
+      "id": "CORE",
+      "kind": "core",
+      "zone": "Z4",
+      "state": "OFFLINE",
+      "requires": { "panels_ok": ["PANEL"] }
+    }
+  ],
+  "chargers": [],
+  "goal": { "stations_online": ["CORE"] },
+  "action_costs": { "pickup": 1, "drop": 1, "interact": 2, "recharge": 3 }
+}

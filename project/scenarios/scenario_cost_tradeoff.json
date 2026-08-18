@@ -1,0 +1,46 @@
+{
+  "meta": {
+    "id": "cost_tradeoff",
+    "title": "Caso 3 — menos acciones no es menor costo",
+    "description": "El corredor directo Z1-Z3 resuelve el viaje en un solo MOVE pero cuesta 20; el rodeo por Z2 cuesta 6 en dos MOVE. El plan con menos acciones es el caro."
+  },
+  "robot": { "start": "Z1", "battery_max": 100, "battery_start": 100, "cargo_capacity": 2 },
+  "zones": [
+    { "id": "Z1", "name": "DEPOT", "recharge": false },
+    { "id": "Z2", "name": "TRANSIT", "recharge": false },
+    { "id": "Z3", "name": "CORE_BAY", "recharge": false }
+  ],
+  "corridors": [
+    { "from": "Z1", "to": "Z3", "cost": 20, "door": null },
+    { "from": "Z3", "to": "Z1", "cost": 20, "door": null },
+    { "from": "Z1", "to": "Z2", "cost": 3, "door": null },
+    { "from": "Z2", "to": "Z1", "cost": 3, "door": null },
+    { "from": "Z2", "to": "Z3", "cost": 3, "door": null },
+    { "from": "Z3", "to": "Z2", "cost": 3, "door": null }
+  ],
+  "doors": [],
+  "keys": [],
+  "tools": [{ "id": "TOOL", "repairs": "X", "zone": "Z1", "weight": 1 }],
+  "materials": [{ "type": "PART", "zone": "Z1", "count": 1, "weight": 1 }],
+  "panels": [
+    {
+      "id": "PANEL",
+      "zone": "Z3",
+      "damage": "X",
+      "requires": { "tool": "TOOL", "material": "PART" },
+      "state": "DAMAGED"
+    }
+  ],
+  "stations": [
+    {
+      "id": "CORE",
+      "kind": "core",
+      "zone": "Z3",
+      "state": "OFFLINE",
+      "requires": { "panels_ok": ["PANEL"] }
+    }
+  ],
+  "chargers": [],
+  "goal": { "stations_online": ["CORE"] },
+  "action_costs": { "pickup": 1, "drop": 1, "interact": 2, "recharge": 3 }
+}

@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "id": "unsolvable",
+    "title": "Caso 4 — misión imposible",
+    "description": "El panel exige un material que no existe en la instalación. No hay plan válido: el agente debe agotar OPEN y devolver FAILURE, no quedarse explorando."
+  },
+  "robot": { "start": "Z1", "battery_max": 100, "battery_start": 100, "cargo_capacity": 2 },
+  "zones": [
+    { "id": "Z1", "name": "DEPOT", "recharge": false },
+    { "id": "Z2", "name": "CORE_BAY", "recharge": false }
+  ],
+  "corridors": [
+    { "from": "Z1", "to": "Z2", "cost": 4, "door": null },
+    { "from": "Z2", "to": "Z1", "cost": 4, "door": null }
+  ],
+  "doors": [],
+  "keys": [],
+  "tools": [{ "id": "TOOL", "repairs": "X", "zone": "Z1", "weight": 1 }],
+  "materials": [],
+  "panels": [
+    {
+      "id": "PANEL",
+      "zone": "Z2",
+      "damage": "X",
+      "requires": { "tool": "TOOL", "material": "PART" },
+      "state": "DAMAGED"
+    }
+  ],
+  "stations": [
+    {
+      "id": "CORE",
+      "kind": "core",
+      "zone": "Z2",
+      "state": "OFFLINE",
+      "requires": { "panels_ok": ["PANEL"] }
+    }
+  ],
+  "chargers": [],
+  "goal": { "stations_online": ["CORE"] },
+  "action_costs": { "pickup": 1, "drop": 1, "interact": 2, "recharge": 3 }
+}

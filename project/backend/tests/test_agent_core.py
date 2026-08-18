@@ -20,7 +20,10 @@ from agent.actions import (  # noqa: E402
     ACTIVATE,
     DROP,
     MOVE,
+    OPEN_DOOR,
     PICKUP,
+    SWAP,
+    Action,
     applicable,
     is_live,
     material_shortfall,
@@ -238,30 +241,94 @@ def test_material_is_not_over_collected() -> None:
     assert ground_count(carrying_fuse.ground, "Z2", "FUSE") == 1
 
 
-def test_drop_is_generated_only_when_capacity_binds() -> None:
-    """Se restringe *cuándo* se suelta; el *cuál* queda exhaustivo."""
+def test_swap_is_generated_only_when_capacity_binds() -> None:
+    """Soltar sólo aparece emparejado con la recogida que lo justifica."""
     domain = build_domain(load_scenario())
     at_z2 = replace(initial_state(domain), zone="Z2")
 
     half_full = _carrying(domain, at_z2, ["KEY1", "MULTITOOL"])
     assert payload_weight(domain, half_full) < domain.cargo_capacity
-    assert _kinds(applicable(domain, half_full), DROP) == []
+    assert [a for a in applicable(domain, half_full) if a.kind in (SWAP, DROP)] == []
 
     full = _carrying(domain, at_z2, ["KEY1", "MULTITOOL", "SOLDERING"])
     assert payload_weight(domain, full) == domain.cargo_capacity
-    assert _kinds(applicable(domain, full), DROP) == ["KEY1", "MULTITOOL", "SOLDERING"]
-    # Con la carga llena tampoco se generan PICKUP.
+    swaps = [a for a in applicable(domain, full) if a.kind == SWAP]
+
+    # Un SWAP por cada par (objeto que sale, objeto que entra).
+    assert sorted(a.releases for a in swaps) == sorted(
+        ["KEY1", "MULTITOOL", "SOLDERING"] * len(set(a.target for a in swaps))
+    )
+    assert set(a.target for a in swaps) == {"KEY2", "FUSE", "CHIP", "CABLE"}
+    assert all(a.cost == domain.cost_drop + domain.cost_pickup for a in swaps)
+    # Con la carga llena no hay PICKUP suelto, y tampoco DROP suelto.
     assert _kinds(applicable(domain, full), PICKUP) == []
+    assert _kinds(applicable(domain, full), DROP) == []
 
 
-def test_drop_needs_something_worth_picking_up_here() -> None:
-    """Carga llena pero sin nada relevante en la zona ⇒ ningún DROP."""
+def test_swap_applies_drop_and_pickup_atomically() -> None:
+    domain = build_domain(load_scenario())
+    at_z2 = replace(initial_state(domain), zone="Z2")
+    full = _carrying(domain, at_z2, ["KEY1", "MULTITOOL", "SOLDERING"])
+
+    swap = next(
+        a
+        for a in applicable(domain, full)
+        if a.kind == SWAP and a.releases == "SOLDERING" and a.target == "FUSE"
+    )
+    after = result(domain, full, swap)
+
+    assert bag_count(after.payload, "SOLDERING") == 0
+    assert bag_count(after.payload, "FUSE") == 1
+    assert ground_count(after.ground, "Z2", "SOLDERING") == 1  # quedó aquí
+    assert ground_count(after.ground, "Z2", "FUSE") == 1  # quedaba stock de 2
+    assert payload_weight(domain, after) == domain.cargo_capacity
+    assert after.battery == full.battery - swap.cost
+
+
+def test_swap_needs_something_worth_picking_up_here() -> None:
+    """Carga llena pero sin nada relevante en la zona ⇒ no se suelta nada."""
     domain = build_domain(load_scenario())
     empty_zone = replace(initial_state(domain), zone="Z4")
     full = _carrying(domain, empty_zone, ["KEY1", "MULTITOOL", "SOLDERING"])
 
     assert ground_at(full.ground, "Z4") == ()
-    assert _kinds(applicable(domain, full), DROP) == []
+    assert [a for a in applicable(domain, full) if a.kind in (SWAP, DROP)] == []
+
+
+def test_dead_items_are_preferred_when_freeing_space() -> None:
+    """Si se lleva un objeto muerto, es el único candidato a soltarse."""
+    domain = build_domain(load_scenario())
+    # DOOR1 abierta ⇒ KEY1 muerta; los dos paneles de las herramientas siguen
+    # pendientes, así que MULTITOOL y SOLDERING siguen vivas.
+    at_z2 = replace(initial_state(domain), zone="Z2", doors_open=("DOOR1",))
+    full = _carrying(domain, at_z2, ["KEY1", "MULTITOOL", "SOLDERING"])
+
+    swaps = [a for a in applicable(domain, full) if a.kind == SWAP]
+    assert swaps, "debería poder hacer hueco"
+    assert set(a.releases for a in swaps) == {"KEY1"}
+
+
+def test_dead_item_position_is_forgotten() -> None:
+    """Canonicalización: dónde quedó un objeto muerto no distingue estados."""
+    domain = build_domain(load_scenario())
+    with_key = _carrying(domain, initial_state(domain), ["KEY1"])
+    opened = result(
+        domain,
+        with_key,
+        next(a for a in applicable(domain, with_key) if a.kind == OPEN_DOOR),
+    )
+    assert bag_count(opened.payload, "KEY1") == 1  # muerta, pero aún cargada
+
+    drop_key = Action(DROP, "KEY1", domain.cost_drop)
+    left_in_z1 = result(domain, opened, drop_key)
+
+    to_z4 = next(a for a in applicable(domain, opened) if a.kind == MOVE and a.target == "Z4")
+    left_in_z4 = result(domain, result(domain, opened, to_z4), drop_key)
+
+    # Abandonarla en Z1 o en Z4 produce el mismo suelo: su posición es
+    # irrelevante porque ya no habilita ninguna acción futura.
+    assert left_in_z1.ground == left_in_z4.ground
+    assert "KEY1" not in [item for _, item, _ in left_in_z1.ground]
 
 
 # --------------------------------------------------------------------------

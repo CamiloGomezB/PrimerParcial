@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .domain import KIND_MATERIAL, Domain
+from .domain import KIND_KEY, KIND_MATERIAL, KIND_TOOL, Domain
 
 # Multiconjunto canónico: pares (objeto, cantidad) ordenados por objeto.
 Bag = tuple[tuple[str, int], ...]
@@ -114,6 +114,88 @@ def set_add(current: tuple[str, ...], item: str) -> tuple[str, ...]:
 
 
 # --------------------------------------------------------------------------
+# Objetos muertos — `design.md` §«Relevancia: objetos que ya no cambian el
+# futuro»
+# --------------------------------------------------------------------------
+
+
+def is_permanently_dead(
+    domain: Domain,
+    item: str,
+    doors_open: tuple[str, ...],
+    panels_ok: tuple[str, ...],
+) -> bool:
+    """¿El objeto ya no puede habilitar ninguna acción futura, para siempre?
+
+    La definición depende **sólo de componentes monótonas** (`doors_open`,
+    `panels_ok`): una vez muerto, un objeto no revive. Esa monotonía es lo que
+    permite olvidar su posición sin perder planes.
+
+    Ojo con la diferencia respecto de `actions.is_live`: aquélla decide si
+    conviene *generar un `PICKUP`* (y para materiales mira además cuántos se
+    llevan encima, cantidad que sí puede subir y bajar). Ésta decide si el
+    objeto puede borrarse del suelo, y por eso ignora la carga.
+    """
+    memo_key = (item, doors_open, panels_ok)
+    cached = domain.dead_cache.get(memo_key)
+    if cached is not None:
+        return cached
+    domain.dead_cache[memo_key] = value = _compute_dead(
+        domain, item, doors_open, panels_ok
+    )
+    return value
+
+
+def _compute_dead(
+    domain: Domain,
+    item: str,
+    doors_open: tuple[str, ...],
+    panels_ok: tuple[str, ...],
+) -> bool:
+    kind = domain.item_kind.get(item)
+
+    if kind == KIND_KEY:
+        return all(door in doors_open for door in domain.doors_opened_by.get(item, ()))
+
+    if kind == KIND_TOOL:
+        return all(
+            pid in panels_ok
+            for pid in domain.required_panels
+            if domain.panel_tool(pid) == item
+        )
+
+    if kind == KIND_MATERIAL:
+        return all(
+            pid in panels_ok
+            for pid in domain.required_panels
+            if domain.panel_material(pid) == item
+        )
+
+    return True  # objeto fuera del cierre de dependencias de la meta
+
+
+def prune_dead_ground(
+    domain: Domain,
+    ground: Ground,
+    doors_open: tuple[str, ...],
+    panels_ok: tuple[str, ...],
+) -> Ground:
+    """Olvida **dónde** quedaron los objetos que ya no sirven.
+
+    Sin esta canonicalización, la llave de una puerta ya abierta sigue
+    distinguiendo estados según en qué zona quedó tirada, y el espacio se
+    multiplica por todas las permutaciones de objetos muertos. Como ninguna
+    acción futura puede referirse a ellos, esas permutaciones son la misma
+    situación física.
+    """
+    return tuple(
+        entry
+        for entry in ground
+        if not is_permanently_dead(domain, entry[1], doors_open, panels_ok)
+    )
+
+
+# --------------------------------------------------------------------------
 # Estado
 # --------------------------------------------------------------------------
 
@@ -157,9 +239,9 @@ class State:
 def initial_state(domain: Domain) -> State:
     """Estado inicial `s₀` derivado del escenario.
 
-    El suelo incluye **todos** los objetos declarados, también los que quedan
-    fuera del cierre de dependencias de la meta: la poda vive en `Applicable`,
-    no en el estado (no se borra información del mundo).
+    Ya nace canonicalizado: los objetos que la misión nunca podrá necesitar
+    (fuera del cierre de dependencias, o cuyo trabajo el escenario declara
+    hecho) no ocupan sitio en el suelo.
     """
     ground: Ground = ()
     for item, kind in domain.item_kind.items():
@@ -170,13 +252,16 @@ def initial_state(domain: Domain) -> State:
         else:
             ground = ground_add(ground, domain.item_home[item], item, 1)
 
+    doors_open = domain.initial_doors_open
+    panels_ok = domain.initial_panels_ok
+
     return State(
         zone=domain.start_zone,
         battery=domain.battery_start,
         payload=(),
-        ground=ground,
-        doors_open=domain.initial_doors_open,
-        panels_ok=domain.initial_panels_ok,
+        ground=prune_dead_ground(domain, ground, doors_open, panels_ok),
+        doors_open=doors_open,
+        panels_ok=panels_ok,
         stations_online=domain.initial_stations_online,
     )
 

@@ -15,7 +15,7 @@ su argumento de *soundness* escrito en `design.md`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from .domain import KIND_KEY, KIND_MATERIAL, KIND_TOOL, Domain
 from .state import (
@@ -28,13 +28,16 @@ from .state import (
     ground_add,
     ground_at,
     ground_remove,
+    is_permanently_dead,
     payload_weight,
+    prune_dead_ground,
     set_add,
 )
 
 MOVE = "MOVE"
 PICKUP = "PICKUP"
 DROP = "DROP"
+SWAP = "SWAP"
 OPEN_DOOR = "OPEN_DOOR"
 REPAIR = "REPAIR"
 ACTIVATE = "ACTIVATE"
@@ -55,6 +58,7 @@ class Action:
     cost: int
     origin: str | None = None  # MOVE: zona de salida
     consumes: str | None = None  # REPAIR: material que se consume
+    releases: str | None = None  # SWAP: objeto que se suelta para hacer hueco
 
 
 # --------------------------------------------------------------------------
@@ -150,12 +154,47 @@ def applicable(domain: Domain, state: State) -> list[Action]:
     # produce un plan legal de costo ≤ (argumento de intercambio en design.md),
     # mientras que elegir el objeto con una heurística sí podría perder el
     # óptimo. El número de candidatos está acotado por `cargo_capacity`.
-    if state.payload and battery >= domain.cost_drop:
+    # Soltar sólo tiene sentido para hacer hueco a una recogida **aquí mismo**:
+    # un `DROP` que no habilita ninguna recogida puede diferirse (o borrarse)
+    # sin encarecer el plan. Por eso el sucesor natural no es «soltar», sino
+    # «cambiar»: soltar x y recoger y en el mismo paso. Así desaparecen del
+    # grafo los estados intermedios con un hueco en la carga, que eran pura
+    # combinatoria sin decisión.
+    if state.payload and wanted:
         room = free_capacity(domain, state)
-        room_needed = any(domain.weight_of(item) > room for item in wanted)
-        if room_needed:
-            for item in sorted(set(bag_items(state.payload))):
-                actions.append(Action(DROP, item, domain.cost_drop))
+        carried = sorted(set(bag_items(state.payload)))
+        # Si se lleva algún objeto ya muerto, sólo se suelta ése: soltar el
+        # muerto en vez de uno vivo deja el mismo hueco al mismo costo y evita
+        # tener que volver a recoger el vivo. Nunca empeora el plan.
+        dead = [
+            item
+            for item in carried
+            if is_permanently_dead(domain, item, state.doors_open, state.panels_ok)
+        ]
+        releasable = dead or carried
+        swap_cost = domain.cost_drop + domain.cost_pickup
+
+        for incoming in wanted:
+            deficit = domain.weight_of(incoming) - room
+            if deficit <= 0:
+                continue  # cabe sin soltar nada: ya se generó como PICKUP
+            singles = [
+                item
+                for item in releasable
+                if item != incoming and domain.weight_of(item) >= deficit
+            ]
+            if singles:
+                if battery >= swap_cost:
+                    for item in singles:
+                        actions.append(
+                            Action(SWAP, incoming, swap_cost, releases=item)
+                        )
+            elif battery >= domain.cost_drop:
+                # Un solo objeto no libera espacio suficiente (objetos de peso
+                # mayor que 1): se recurre al `DROP` suelto para no perder
+                # planes que necesiten liberar varias plazas.
+                for item in releasable:
+                    actions.append(Action(DROP, item, domain.cost_drop))
 
     # --- INTERACT: OPEN_DOOR ------------------------------------------------
     if battery >= domain.cost_interact:
@@ -220,61 +259,133 @@ def result(domain: Domain, state: State, action: Action) -> State:
     if battery < 0:
         raise ValueError(f"batería insuficiente para {action}")
 
-    if action.kind == MOVE:
-        return replace(state, zone=action.target, battery=battery)
+    kind = action.kind
+    target = action.target
 
-    if action.kind == PICKUP:
-        return replace(
-            state,
-            battery=battery,
-            payload=bag_add(state.payload, action.target),
-            ground=ground_remove(state.ground, state.zone, action.target),
+    # Se construye el estado campo a campo (en vez de `dataclasses.replace`)
+    # porque ésta es la ruta más caliente de la búsqueda.
+    if kind == MOVE:
+        return State(
+            target,
+            battery,
+            state.payload,
+            state.ground,
+            state.doors_open,
+            state.panels_ok,
+            state.stations_online,
         )
 
-    if action.kind == DROP:
-        return replace(
-            state,
-            battery=battery,
-            payload=bag_remove(state.payload, action.target),
-            ground=ground_add(state.ground, state.zone, action.target),
+    if kind == PICKUP:
+        return State(
+            state.zone,
+            battery,
+            bag_add(state.payload, target),
+            ground_remove(state.ground, state.zone, target),
+            state.doors_open,
+            state.panels_ok,
+            state.stations_online,
         )
 
-    if action.kind == OPEN_DOOR:
-        return replace(
-            state,
-            battery=battery,
-            doors_open=set_add(state.doors_open, action.target),
+    if kind == DROP:
+        # Un objeto muerto que se suelta no vuelve a mencionarse: su posición
+        # ya no distingue estados, así que no se registra en el suelo.
+        if is_permanently_dead(domain, target, state.doors_open, state.panels_ok):
+            ground = state.ground
+        else:
+            ground = ground_add(state.ground, state.zone, target)
+        return State(
+            state.zone,
+            battery,
+            bag_remove(state.payload, target),
+            ground,
+            state.doors_open,
+            state.panels_ok,
+            state.stations_online,
         )
 
-    if action.kind == REPAIR:
-        material = action.consumes or domain.panel_material(action.target)
-        return replace(
-            state,
-            battery=battery,
-            payload=bag_remove(state.payload, material),
-            panels_ok=set_add(state.panels_ok, action.target),
+    if kind == SWAP:
+        released = action.releases
+        assert released is not None
+        if is_permanently_dead(domain, released, state.doors_open, state.panels_ok):
+            ground = state.ground
+        else:
+            ground = ground_add(state.ground, state.zone, released)
+        return State(
+            state.zone,
+            battery,
+            bag_add(bag_remove(state.payload, released), target),
+            ground_remove(ground, state.zone, target),
+            state.doors_open,
+            state.panels_ok,
+            state.stations_online,
         )
 
-    if action.kind == ACTIVATE:
-        return replace(
-            state,
-            battery=battery,
-            stations_online=set_add(state.stations_online, action.target),
+    if kind == OPEN_DOOR:
+        doors_open = set_add(state.doors_open, target)
+        return State(
+            state.zone,
+            battery,
+            state.payload,
+            # Abrir la puerta puede matar su llave: se olvida dónde quedó.
+            prune_dead_ground(domain, state.ground, doors_open, state.panels_ok),
+            doors_open,
+            state.panels_ok,
+            state.stations_online,
         )
 
-    if action.kind == RECHARGE:
+    if kind == REPAIR:
+        material = action.consumes or domain.panel_material(target)
+        panels_ok = set_add(state.panels_ok, target)
+        return State(
+            state.zone,
+            battery,
+            bag_remove(state.payload, material),
+            # Reparar puede matar la herramienta y el material sobrante.
+            prune_dead_ground(domain, state.ground, state.doors_open, panels_ok),
+            state.doors_open,
+            panels_ok,
+            state.stations_online,
+        )
+
+    if kind == ACTIVATE:
+        return State(
+            state.zone,
+            battery,
+            state.payload,
+            state.ground,
+            state.doors_open,
+            state.panels_ok,
+            set_add(state.stations_online, target),
+        )
+
+    if kind == RECHARGE:
         # El costo se paga **antes** de recargar (CONTRATO.md §4).
-        return replace(state, battery=domain.battery_max)
+        return State(
+            state.zone,
+            domain.battery_max,
+            state.payload,
+            state.ground,
+            state.doors_open,
+            state.panels_ok,
+            state.stations_online,
+        )
 
     raise ValueError(f"acción interna desconocida: {action.kind}")
 
 
 def branching_factor_bound(domain: Domain, state: State) -> int:
-    """Cota superior de |A(s)|, útil para instrumentar la búsqueda."""
+    """Cota superior de |A(s)|, útil para instrumentar la búsqueda.
+
+    El término de los intercambios es el único cuadrático: como mucho
+    «objetos cargados × objetos deseables aquí», ambos acotados por la
+    capacidad y por el contenido de una zona.
+    """
+    wanted = len(_wanted_here(domain, state))
+    carried = payload_weight(domain, state)
     return (
         len(domain.adjacency.get(state.zone, ()))
-        + len(_wanted_here(domain, state))
-        + payload_weight(domain, state)
+        + wanted
+        + carried * wanted
         + len(domain.doors_at.get(state.zone, ()))
         + len(domain.panels_at.get(state.zone, ()))
         + len(domain.stations_at.get(state.zone, ()))

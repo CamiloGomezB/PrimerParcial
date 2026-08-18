@@ -70,6 +70,9 @@ class Domain:
 
     def __init__(self, scenario: dict[str, Any]) -> None:
         self.raw = scenario
+        # Memo de «objeto muerto»: la respuesta sólo depende de componentes
+        # monótonas, así que se repite masivamente durante la búsqueda.
+        self.dead_cache: dict[tuple[str, tuple[str, ...], tuple[str, ...]], bool] = {}
 
         robot = _require(scenario, "robot")
         self.start_zone: str = _require(robot, "start")

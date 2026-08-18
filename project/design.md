@@ -157,14 +157,32 @@ falta(m,s) = #{ p ∈ P* : p ∉ paneles(s) ∧ material(p) = m } − carga(m)
 
 Una llave cuya puerta ya está abierta, una herramienta cuyos paneles ya están
 todos reparados o un material cuyo consumo ya está cubierto **no aparecen en
-ninguna precondición alcanzable**. Su posición en el suelo sigue siendo parte
-del estado (no se borra información), pero el agente **deja de generar `PICKUP`
-sobre ellos**, con lo que sus posiciones dejan de multiplicarse por combinatoria.
+ninguna precondición alcanzable**. El agente hace dos cosas con ellos:
+
+1. **deja de generar `PICKUP`** sobre ellos, y
+2. **olvida dónde quedaron**: al canonicalizar el estado, los objetos muertos se
+   borran del suelo.
+
+El punto 2 es el que de verdad controla el tamaño del espacio. Si se conserva la
+posición de un objeto muerto, dos planes que abandonan la misma llave inservible
+en zonas distintas siguen siendo estados distintos, y el espacio se multiplica
+por **todas las permutaciones de objetos muertos** sin que exista ninguna
+decisión real detrás. Medido sobre la instancia demo, conservar esas posiciones
+multiplicaba por más de cinco el número de configuraciones de suelo alcanzadas.
 
 Esto no pierde el óptimo: si un objeto no aparece en la precondición de ninguna
 acción ejecutable de aquí en adelante, ninguna secuencia que lo recoja puede
 habilitar algo que la misma secuencia sin recogerlo no habilite; y como
-`pickup ≥ 0`, quitar ese `PICKUP` del plan nunca aumenta el costo.
+`pickup ≥ 0`, quitar ese `PICKUP` del plan nunca aumenta el costo. Y como su
+posición no puede aparecer en ninguna precondición futura, olvidarla no elimina
+ningún sucesor alcanzable.
+
+Un matiz de implementación importante: la condición de «muerto» se define
+**sólo sobre componentes monótonas** (`puertas`, `paneles`), nunca sobre la
+carga. Así, una vez muerto, un objeto no revive, y borrarlo del suelo es
+seguro. Para materiales existe una segunda condición, `falta(m,s) > 0`, que sí
+depende de la carga y puede subir y bajar; ésa gobierna si se genera un
+`PICKUP`, pero **no** autoriza a borrar nada del estado.
 
 ### Poda por cierre de dependencias de la meta
 
@@ -208,7 +226,8 @@ Acciones **internas** del agente. Toda acción exige además `batería ≥ costo
 |---|---|---|---|
 | `MOVE(z→z')` | existe corredor `(z,z')` en `Σ`; `zona = z`; si el corredor tiene puerta `d`, entonces `d ∈ puertas` | `zona ← z'` | `cost` del corredor `(z,z')` |
 | `PICKUP(x)` | `x` está en el suelo de `zona`; `peso(carga) + weight(x) ≤ cargo_capacity`; **`x` es relevante y está vivo** | `carga ← carga ⊎ {x}`; `suelo ← suelo ∖ {x}` | `action_costs.pickup` |
-| `DROP(x)` | `x ∈ carga`; **hace falta hueco aquí y ahora** (ver abajo) | `carga ← carga ∖ {x}`; `suelo ← suelo ⊎ {x@zona}` | `action_costs.drop` |
+| `SWAP(x↓, y↑)` | `x ∈ carga`; `y` vivo en el suelo de `zona`; `y` **no cabe** sin soltar; `weight(x) ≥ weight(y) − hueco` | `carga ← (carga ∖ {x}) ⊎ {y}`; `suelo ← (suelo ∖ {y}) ⊎ {x@zona}` | `action_costs.drop + action_costs.pickup` |
+| `DROP(x)` | `x ∈ carga`; hace falta hueco y **ningún objeto suelto basta** para abrirlo (objetos de peso > 1) | `carga ← carga ∖ {x}`; `suelo ← suelo ⊎ {x@zona}` | `action_costs.drop` |
 | `OPEN_DOOR(d)` | `zona ∈ between(d)`; `d ∉ puertas`; `key(d) ∈ carga` | `puertas ← puertas ∪ {d}` | `action_costs.interact` |
 | `REPAIR(p)` | `p ∈ P*`; `zona = zone(p)`; `p ∉ paneles`; `tool(p) ∈ carga`; `material(p) ∈ carga` | `paneles ← paneles ∪ {p}`; **se consume** una unidad de `material(p)` de la carga; la herramienta **no** se consume | `action_costs.interact` |
 | `ACTIVATE(st)` | `st ∈ S*`; `zona = zone(st)`; `st ∉ estaciones`; `requires(st).panels_ok ⊆ paneles`; `requires(st).stations_online ⊆ estaciones` | `estaciones ← estaciones ∪ {st}` | `action_costs.interact` |
@@ -220,11 +239,14 @@ el `cost` de cada corredor), como exige §5 del contrato.
 Cota del factor de ramificación real:
 
 ```text
-|A(s)| ≤ grado(zona) + |vivos en zona| + |carga| + |puertas en zona|
-         + |paneles pendientes en zona| + |estaciones activables en zona| + 1
+|A(s)| ≤ grado(zona) + |vivos aquí| + |carga|·|vivos aquí| + |puertas aquí|
+         + |paneles pendientes aquí| + |estaciones activables aquí| + 1
 ```
 
-es decir, del orden de una docena — y no del orden de «cada objeto × cada zona».
+El único término cuadrático es el de los `SWAP`, y sus dos factores están
+acotados por la capacidad de carga y por el contenido de **una** zona. Medido
+sobre la instancia demo durante la búsqueda completa: **ramificación media 4,04
+y máxima 18** — y no del orden de «cada objeto × cada zona».
 
 ### `Applicable` interno vs legalidad del contrato
 
@@ -244,36 +266,56 @@ producido puede ser rechazado por el banco de pruebas. Lo que el agente hace es
 3. `DROP` fuera del momento en que la capacidad realmente obliga.
 4. `REPAIR`/`ACTIVATE` sobre paneles o estaciones fuera del cierre.
 
-#### Cuándo se genera `DROP` — y por qué no se pierde el óptimo
+#### Cuándo se suelta un objeto — y por qué no se pierde el óptimo
 
 `DROP` es el cuello de botella del problema: si se genera un sucesor por cada
 objeto cargado en cada estado, el espacio deja de ser «cinco zonas» y pasa a ser
-«en cuál de las cinco zonas quedó cada objeto». La regla del agente es:
+«en cuál de las cinco zonas quedó cada objeto». El agente aplica dos
+restricciones encadenadas.
 
-> **Se genera `DROP(x)` únicamente en estados donde el robot necesita hueco aquí
-> y ahora**: existe en la zona actual un objeto `y` vivo y relevante que el robot
-> querría recoger y para el cual `peso(carga) + weight(y) > cargo_capacity`.
-> Cuando esa condición se cumple, se genera `DROP(x)` para **todo** `x ∈ carga`.
+**(a) Sólo se suelta para hacer hueco aquí y ahora.** Sea `π` un plan óptimo con
+un `DROP(x)` en un estado donde la capacidad no obligaba. Difiriendo ese
+`DROP(x)` hasta el primer momento en que la capacidad realmente bloquee un
+`PICKUP` —o eliminándolo si ese momento no llega— se obtiene `π'` legal: llevar
+un objeto de más no invalida ninguna precondición (ninguna acción exige *no*
+llevar algo) salvo la de capacidad, que es justo donde se reinserta. Y
+`coste(π') ≤ coste(π)`: el costo `action_costs.drop` es constante —no depende de
+la zona ni del objeto— así que se paga una vez o ninguna, y si `π` volvía luego
+a recoger `x` del suelo, `π'` se ahorra además ese `PICKUP`. Existe pues siempre
+un plan óptimo dentro del subespacio explorado.
 
-Es decir: se restringe **cuándo** se suelta, no **cuál** objeto se suelta.
+**(b) Soltar y recoger son un solo paso: `SWAP`.** El argumento anterior dice
+algo más fuerte: en un plan óptimo, todo `DROP` puede colocarse *inmediatamente
+antes* de la recogida que lo justifica. Un plan que suelta dos objetos y recoge
+dos en la misma zona se reordena como `SWAP, SWAP` sin cambiar el costo ni violar
+la capacidad (se alterna soltar/recoger, y la ocupación nunca sube por encima del
+límite). Por eso el agente no genera `DROP` suelto sino la macro-acción
+`SWAP(x↓, y↑)`, con costo `drop + pickup`.
 
-*Restricción del "cuándo" (argumento de intercambio).* Sea `π` un plan óptimo que
-contiene un `DROP(x)` en un estado donde la capacidad no obligaba. Construimos
-`π'` difiriendo ese `DROP(x)` hasta el primer momento en que la capacidad
-realmente bloquee un `PICKUP` (o eliminándolo si ese momento no llega). `π'` es
-legal: llevar un objeto de más no invalida ninguna precondición —ninguna acción
-exige *no* llevar algo—, salvo la restricción de capacidad, que es exactamente
-donde se reinserta el `DROP`. Y `coste(π') ≤ coste(π)`: se ejecuta el mismo
-`DROP` una vez (el costo `action_costs.drop` es constante, no depende de la zona
-ni del objeto) o ninguna, y si `π` volvía luego a recoger `x` del suelo, `π'` se
-ahorra además ese `PICKUP`, de costo ≥ 0. Por tanto existe siempre un plan óptimo
-dentro del subespacio que el agente sí explora.
+La ganancia no es cosmética: desaparecen del grafo los estados intermedios «con
+un hueco en la carga y un objeto recién tirado en el suelo», que no representan
+ninguna decisión y sí multiplican las configuraciones de suelo. Medido sobre la
+instancia demo, el cambio redujo las expansiones de 768 213 a 236 523 —un factor
+de 3,2— **sin alterar el costo óptimo encontrado (80)**.
 
-*Por qué no se restringe el "cuál".* Se consideró generar solo el `DROP` del
-objeto "menos útil", pero esa heurística **sí** puede perder el óptimo: cuál
-conviene soltar depende del resto del plan, no del estado local. Como el número
-de candidatos está acotado por `cargo_capacity` (3 en la instancia demo), el
-costo de ser exhaustivo aquí es despreciable y la optimalidad queda intacta.
+`DROP` suelto sobrevive únicamente como caso de reserva: si ningún objeto
+individual libera espacio suficiente (posible con objetos de peso mayor que 1),
+se generan los `DROP` individuales para no perder planes que necesiten liberar
+varias plazas.
+
+**(c) Entre candidatos, se prefiere soltar un objeto muerto.** Si la carga
+contiene algún objeto ya inservible, sólo se generan los `SWAP` que lo sueltan a
+él. Intercambio: soltar el muerto en vez de uno vivo deja el mismo hueco al mismo
+costo, y evita el `PICKUP` con el que el plan tendría que recuperar el vivo; el
+muerto, por definición, no se recupera nunca. El plan transformado nunca es peor.
+
+*Por qué no se restringe **cuál** objeto vivo se suelta.* Se consideró soltar
+siempre el "menos útil", pero esa heurística **sí** puede perder el óptimo: cuál
+conviene soltar depende del resto del plan, no del estado local. Se comprobó
+empíricamente: restringir los `SWAP` a objetos muertos hace la búsqueda 15 veces
+más rápida pero devuelve un plan de costo 88 en lugar de 80. Como el número de
+candidatos está acotado por `cargo_capacity`, ser exhaustivo aquí es barato y la
+optimalidad queda intacta.
 
 #### Cuánto material se recoge
 
@@ -415,9 +457,25 @@ observado.
   mapa** (≤ 3 aquí) sino el número de sucesores que el agente genera por estado.
   Ahí es donde actúan las podas: sin ellas `b` incluye un `DROP` por objeto
   cargado en cada estado y un `PICKUP` por objeto presente, y el árbol crece con
-  las posiciones combinatorias de los objetos; con ellas `b` queda en torno a una
-  docena. La memoria es el recurso crítico, como en todo UCS: `OPEN` y `CLOSED`
-  guardan estados completos.
+  las posiciones combinatorias de los objetos. La memoria es el recurso crítico,
+  como en todo UCS: `OPEN` y `CLOSED` guardan estados completos.
+
+  Efecto medido de cada poda sobre la instancia demo:
+
+  | Formulación | Suelos distintos | Expandidos | Tiempo | Costo hallado |
+  |---|---|---|---|---|
+  | Se conserva la posición de los objetos muertos | — | no termina | > 300 s | — |
+  | Se olvida la posición de los muertos, `DROP` suelto | 54 955 | 768 213 | 37 s | **80** |
+  | Además `SWAP` en vez de `DROP` suelto | 12 302 | 236 523 | 14 s | **80** |
+
+  Las dos formulaciones que terminan devuelven el **mismo costo óptimo (80)**:
+  las podas recortan trabajo, no calidad. El salto grande lo produce fundir
+  soltar y recoger, porque son los estados «con un hueco en la carga y un objeto
+  recién tirado» los que multiplicaban las configuraciones de suelo.
+
+  Como contraste, una poda **no** *sound* —restringir los intercambios a soltar
+  únicamente objetos muertos— baja el tiempo a 0,9 s pero devuelve un plan de
+  costo **88**: pierde el óptimo. Por eso no se aplica.
 - **Cuándo se rompen las garantías**:
   1. costos negativos (invalidarían el orden de extracción; el contrato los
      prohíbe) o ciclos de costo 0 sin `CLOSED`;
@@ -498,8 +556,10 @@ de lo que avanza el costo.
 |---|---|
 | Materiales por tipo con contador, no por id | Los objetos del mismo tipo son intercambiables: permutarlos da planes de idéntico costo. Se colapsa una clase de equivalencia, no una decisión. |
 | `PICKUP` solo de objetos **vivos** | Un objeto muerto no aparece en ninguna precondición alcanzable; borrar su `PICKUP` de un plan lo deja válido y de costo ≤. |
+| Se **olvida la posición** de los objetos muertos | Su ubicación no puede aparecer en ninguna precondición futura, así que las variantes que sólo difieren en ella son la misma situación física. |
 | `PICKUP` de material solo si `falta(m,s) > 0` | Una unidad que nunca se consume solo añade costo y ocupa capacidad; eliminarla daría un plan estrictamente mejor, contradiciendo la optimalidad. |
-| `DROP` solo cuando la capacidad obliga | Argumento de intercambio: diferir un `DROP` hasta que la capacidad bloquee un `PICKUP` produce un plan legal de costo ≤ (§ *Cuándo se genera `DROP`*). |
+| Soltar sólo cuando la capacidad obliga, y fundido con la recogida en `SWAP` | Argumento de intercambio: diferir el `DROP` hasta que bloquee un `PICKUP` y colocarlo justo antes de éste produce un plan legal de costo ≤ (§ *Cuándo se suelta un objeto*). |
+| Entre candidatos a soltar, se prefiere el muerto | Deja el mismo hueco al mismo costo y ahorra el `PICKUP` de recuperación del vivo. |
 | `REPAIR`/`ACTIVATE`/`PICKUP` restringidos al cierre de dependencias de `goal` | Por inducción sobre las precondiciones, ningún elemento fuera del cierre justifica un paso necesario para `Goal(s)`. |
 | Dominancia de batería en `CLOSED` | Más batería al mismo o menor costo permite ejecutar todo lo que el dominado permitía (incluido el caso `RECHARGE`, omitiéndolo). |
 

@@ -136,6 +136,14 @@ export interface SolveResponse {
   total_cost: number
   steps: PlanStep[]
   message?: string
+  /** Instrumentación de la búsqueda; opcional, fuera del contrato del plan. */
+  stats?: {
+    expanded: number
+    generated: number
+    pruned_dominated: number
+    max_open: number
+    elapsed_ms: number
+  }
 }
 
 export interface LogEntry {

@@ -29,6 +29,7 @@ export async function runPlan(): Promise<void> {
   if (!scenario || !runtime || plan.length === 0) return
 
   store.setRunning(true)
+  store.setOutcome('running')
   store.appendLog({ text: `[---] Executing plan (${plan.length} steps)...`, level: 'info' })
 
   let current = runtime
@@ -42,6 +43,7 @@ export async function runPlan(): Promise<void> {
     if (!result.ok) {
       store.appendLog({ text: `[${idx}] ERROR: ${result.message}`, level: 'error' })
       store.setError(result.message)
+      store.setOutcome('rejected')
       store.setRunning(false)
       return
     }
@@ -68,11 +70,13 @@ export async function runPlan(): Promise<void> {
       text: `[***] MISSION COMPLETE — all stations ONLINE (spent ${current.energySpent})`,
       level: 'ok',
     })
+    store.setOutcome('success')
   } else {
     store.appendLog({
       text: `[***] Plan finished but goal NOT satisfied`,
       level: 'warn',
     })
+    store.setOutcome('failed')
   }
   store.setRunning(false)
   store.setAnim([], null)

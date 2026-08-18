@@ -64,6 +64,8 @@ export function LeftPanel() {
         {payload.length === 0 && <div className="muted">No items equipped.</div>}
       </PanelShell>
 
+      <MissionProgress />
+
       <PanelShell title="MAP LEGEND">
         <ul className="legend">
           <li><span className="dot" style={{ background: COLOR_MAP.yellow }} /> Keys</li>
@@ -79,6 +81,64 @@ export function LeftPanel() {
         </ul>
       </PanelShell>
     </aside>
+  )
+}
+
+/** Progreso de la misión: estado en vivo de paneles y estaciones. */
+function MissionProgress() {
+  const scenario = useSimStore((s) => s.scenario)
+  const panels = useSimStore((s) => s.runtime?.panels)
+  const stations = useSimStore((s) => s.runtime?.stations)
+  if (!scenario || !panels || !stations) return null
+
+  const goal = scenario.goal.stations_online
+  const done = goal.filter((id) => stations[id] === 'ONLINE').length
+
+  return (
+    <PanelShell title={`MISSION PROGRESS — ${done}/${goal.length}`}>
+      <div className="mission-list">
+        {scenario.panels.map((p) => (
+          <div key={p.id} className="mission-row">
+            <span>{p.id}</span>
+            <span className={panels[p.id] === 'OK' ? 'pill pill-ok' : 'pill pill-bad'}>
+              {panels[p.id]}
+            </span>
+          </div>
+        ))}
+        {scenario.stations.map((s) => (
+          <div key={s.id} className="mission-row">
+            <span>
+              {s.id}
+              {goal.includes(s.id) && <em className="goal-mark"> ★</em>}
+            </span>
+            <span className={stations[s.id] === 'ONLINE' ? 'pill pill-ok' : 'pill pill-bad'}>
+              {stations[s.id]}
+            </span>
+          </div>
+        ))}
+      </div>
+    </PanelShell>
+  )
+}
+
+const BANNERS = {
+  success: { text: 'MISSION COMPLETE', cls: 'banner-ok' },
+  failed: { text: 'FAILURE — no valid plan', cls: 'banner-bad' },
+  rejected: { text: 'PLAN REJECTED BY SIMULATOR', cls: 'banner-bad' },
+} as const
+
+/** Resultado final de la ejecución, visible sin leer el log. */
+export function ResultBanner() {
+  const outcome = useSimStore((s) => s.outcome)
+  const error = useSimStore((s) => s.error)
+  if (outcome === 'idle' || outcome === 'running') return null
+
+  const banner = BANNERS[outcome]
+  return (
+    <div className={`result-banner ${banner.cls}`}>
+      <strong>{banner.text}</strong>
+      {error && <span className="result-detail">{error}</span>}
+    </div>
   )
 }
 
@@ -108,7 +168,14 @@ export function RightPanel() {
     <aside className="hud-right">
       <PanelShell title="ENERGY COST" className="energy-cost">
         <div className="energy-big">{energySpent}</div>
-        {totalCost > 0 && <div className="muted">Plan total: {totalCost}</div>}
+        {totalCost > 0 && (
+          <div className="muted">
+            Plan total: {totalCost}
+            {energySpent === totalCost && stepIndex === planLen && planLen > 0 && (
+              <span className="pill pill-ok cost-match">match</span>
+            )}
+          </div>
+        )}
       </PanelShell>
 
       <PanelShell title="EXECUTION LOG" className="log-panel">

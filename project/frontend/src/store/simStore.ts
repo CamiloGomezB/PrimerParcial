@@ -41,6 +41,9 @@ function buildRuntime(scenario: Scenario): WorldRuntime {
   }
 }
 
+/** Resultado visible de la última ejecución. */
+export type Outcome = 'idle' | 'running' | 'success' | 'failed' | 'rejected'
+
 interface SimState {
   scenario: Scenario | null
   runtime: WorldRuntime | null
@@ -53,6 +56,7 @@ interface SimState {
   animTarget: [number, number, number] | null
   animWaypoints: [number, number, number][]
   error: string | null
+  outcome: Outcome
 
   loadScenario: (scenario: Scenario) => void
   reset: () => void
@@ -66,6 +70,7 @@ interface SimState {
   setRobotPosition: (pos: [number, number, number]) => void
   setRobotYaw: (yaw: number) => void
   setError: (msg: string | null) => void
+  setOutcome: (o: Outcome) => void
   setPayload: (payload: PayloadItem[]) => void
 }
 
@@ -81,6 +86,7 @@ export const useSimStore = create<SimState>((set, get) => ({
   animTarget: null,
   animWaypoints: [],
   error: null,
+  outcome: 'idle',
 
   loadScenario: (scenario) => {
     const runtime = buildRuntime(scenario)
@@ -94,6 +100,7 @@ export const useSimStore = create<SimState>((set, get) => ({
       animTarget: null,
       animWaypoints: [],
       error: null,
+      outcome: 'idle',
       log: [
         {
           index: 0,
@@ -123,6 +130,7 @@ export const useSimStore = create<SimState>((set, get) => ({
   setSpeed: (v) => set({ speed: v }),
   setStepIndex: (i) => set({ stepIndex: i }),
   setError: (msg) => set({ error: msg }),
+  setOutcome: (o) => set({ outcome: o }),
   setPayload: (payload) => {
     const runtime = get().runtime
     if (!runtime) return

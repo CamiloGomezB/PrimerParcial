@@ -4,7 +4,7 @@ import scenarioData from '@scenario'
 import type { Scenario } from './types'
 import { useSimStore } from './store/simStore'
 import { World } from './scene/World'
-import { BottomControls, LeftPanel, RightPanel } from './ui/HUD'
+import { BottomControls, LeftPanel, ResultBanner, RightPanel } from './ui/HUD'
 import { fetchPlan, runPlan } from './lib/api'
 import './App.css'
 
@@ -16,6 +16,7 @@ export default function App() {
   const setPlan = useSimStore((s) => s.setPlan)
   const appendLog = useSimStore((s) => s.appendLog)
   const setError = useSimStore((s) => s.setError)
+  const setOutcome = useSimStore((s) => s.setOutcome)
 
   useEffect(() => {
     loadScenario(scenario)
@@ -29,11 +30,18 @@ export default function App() {
       const response = await fetchPlan(scenario)
       setPlan(response)
       if (!response.solution_found) {
+        setOutcome('failed')
         appendLog({
           text: `[---] FAILURE: ${response.message ?? 'no solution'}`,
           level: 'error',
         })
         return
+      }
+      if (response.stats) {
+        appendLog({
+          text: `[---] Search: ${response.stats.expanded} nodes expanded in ${response.stats.elapsed_ms} ms`,
+          level: 'info',
+        })
       }
       appendLog({
         text: `[---] Plan received — ${response.steps.length} steps, cost ${response.total_cost}`,
@@ -45,6 +53,7 @@ export default function App() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
+      setOutcome('rejected')
       appendLog({ text: `[---] API ERROR: ${msg}`, level: 'error' })
     }
   }
@@ -59,6 +68,7 @@ export default function App() {
           <World />
         </Canvas>
       </div>
+      <ResultBanner />
       <LeftPanel />
       <RightPanel />
       <BottomControls onExecute={onExecute} onReset={reset} />
